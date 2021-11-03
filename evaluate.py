@@ -1,7 +1,7 @@
 import torch,os, h5py
 from models import EncoderDecoder
 from data_utils import DataOrderScaner
-from t2vec import setArgs
+from main import setArgs
 from sklearn import metrics
 import seaborn as sns
 import pandas as pd

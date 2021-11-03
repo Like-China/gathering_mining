@@ -10,7 +10,7 @@ from funcy import merge
 from data_utils import pad_arrays_pair,pad_arrays_keep_invp
 from sklearn.cluster import KMeans,AgglomerativeClustering,DBSCAN
 import numpy as np
-from t2vec import setArgs
+from main import setArgs
 from evaluate import recall_after_combine, commom_vals
     
 def init_parameters(model):

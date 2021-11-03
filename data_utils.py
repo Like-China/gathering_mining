@@ -477,7 +477,7 @@ class DataOrderScaner():
 #test
 if __name__ == "__main__":
     import constants
-    from t2vec import setArgs
+    from main import setArgs
     from generate_groups import create_trj
     import os
     args = setArgs()
