@@ -1,15 +1,16 @@
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_packed_sequence
 from torch.nn.utils.rnn import pack_padded_sequence
-import constants
+import settings as constants
+
 
 class Encoder(nn.Module):
-    # 输入向量的特征维度 input_size = args.vocab_size = 18864
-    # 隐藏层 向量维度 hidden_size = args.embeddingsize= 256
-    # num_layers = args.hidden_size = 3
-    # embedding (vocab_size, input_size): pretrained embedding 提前训练好了的
-    def __init__(self, input_size, hidden_size, num_layers, dropout,
-                       bidirectional, embedding):
+    """
+    The characteristic dimension of the input vector, input_size = args.vocab_size = 18864
+    The dimension of the hidden layer vector, hidden_size = args.embedding_size= 256
+    num_layers = args.hidden_size = 3
+    """
+    def __init__(self, input_size, hidden_size, num_layers, dropout, bidirectional, embedding):
 
         super(Encoder, self).__init__()
         self.num_directions = 2 if bidirectional else 1
@@ -39,37 +40,34 @@ class Encoder(nn.Module):
         embed = self.embedding(input)
         lengths = lengths.data.view(-1).tolist()
         if lengths is not None:
-            embed = pack_padded_sequence(embed, lengths) # 压缩掉无效的填充值
+            embed = pack_padded_sequence(embed, lengths) # Compress invalid fill-in values
         output, hn = self.rnn(embed, h0)
         if lengths is not None:
-            output = pad_packed_sequence(output)[0] # 压紧的序列再填充回来，便于进行后续的处理
+            output = pad_packed_sequence(output)[0] # The compressed sequence is then filled back in for subsequent processing
         return hn, output
 
 
 class EncoderDecoder(nn.Module):
-    # 输入向量的特征维度 input_size= args.vocab_size = 18864
-    # 隐藏层 向量维度 hidden_size= embedding_size= 256
+    # The characteristic dimension of the input vector, input_size= args.vocab_size = 18864
+    # The dimension of the hidden layer vector, hidden_size= embedding_size= 256
     # num_layers = 3
     # dropout = args.dropout = 0.2
     # bidirectional = true
-    # embedding 在此处定义，encoder and decoder共享，是将18864的词汇表映射到一个256维度的向量空间
-    def __init__(self, vocab_size, embedding_size,
-                       hidden_size, num_layers, dropout, bidirectional):
+    # embedding define here，encoder and decoder share, Map a vocabulary of 18864 terms to a 256-dimensional vector space
+    def __init__(self, args, vocab_size):
         super(EncoderDecoder, self).__init__()
         self.vocab_size = vocab_size
-        self.embedding_size = embedding_size
-        self.embedding = nn.Embedding(vocab_size, embedding_size,
+        self.embedding_size = args.embedding_size
+        self.embedding = nn.Embedding(vocab_size, args.embedding_size,
                                       padding_idx=constants.PAD)
-        # 生成：hn, output
+        # generate：hn, output
         # hn (num_layers*num_directions, batch, hidden_size): the hidden state of each layer
         # output (seq_len, batch, hidden_size*num_directions): output tensor
-        self.encoder = Encoder(embedding_size, hidden_size, num_layers,
-                               dropout, bidirectional, self.embedding)
-        self.num_layers = num_layers
+        self.encoder = Encoder(args.embedding_size, args.hidden_size, args.num_layers,
+                               args.dropout, args.bidirectional, self.embedding)
+        self.num_layers = args.num_layers
 
-
-
-    # 将encoder的输出隐藏层转化为decoder的隐藏层输入
+    # Convert encoder's output hide layer to decoder's hide layer input
     def encoder_hn2decoder_h0(self, h):
         """
         Input:
@@ -86,7 +84,6 @@ class EncoderDecoder(nn.Module):
         else:
             return h
 
-
     def forward(self, src, lengths, trg):
         """
         Input:
@@ -100,7 +97,6 @@ class EncoderDecoder(nn.Module):
         """
         encoder_hn, H = self.encoder(src, lengths)
         decoder_h0 = self.encoder_hn2decoder_h0(encoder_hn)
-        ## target去除EOS行后调入decoder
+        # Target that removed the EOS put in decoder
         output, decoder_hn = self.decoder(trg[:-1], decoder_h0, H)
-        ''' test '''
         return output

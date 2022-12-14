@@ -1,3 +1,3 @@
-2021、8、23 修改该文档，复制到新的gathering项目下，只保留encoder部分
-
-2021/11/3 准备rebuttel, 将数据文件读取放在一个单独的文件夹内部E:/gathering mining/data
+datasets
+Beijing https://www.microsoft.com/en-us/research/publication/t-drive-trajectory-data-sample/
+Porto https://www.kaggle.com/c/pkdd-15-predict-taxi-service-trajectory-i/data

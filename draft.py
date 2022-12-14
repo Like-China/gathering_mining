@@ -9,13 +9,13 @@ Created on Sat Dec 26 11:59:54 2020
 import h5py
 import numpy as np
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+
 
 def read_trajs():
-    import matplotlib.pyplot as plt
     total_length = []
     totoal_time = []
-    maxId = 0
-    with h5py.File('./data/beijing.h5','r') as f:
+    with h5py.File('F/data/beijing.h5', 'r') as f:
     
         for ii in tqdm(range(f.attrs['num'])):
             trip = np.array(f.get('trips/'+str(ii+1)))
@@ -30,16 +30,14 @@ def read_trajs():
         plt.plot(totoal_time,'r*')
     
 
-
-
-
 if __name__ == "__main__":
     i = 100
-    with h5py.File("./data/porto.h5",'r') as f:
+    with h5py.File("E:/data/porto.h5", 'r') as f:
         print(f.attrs['num'])
         trip = np.array(f.get('trips/'+str(i+1)))
         ts = np.array(f.get('timestamps/'+str(i+1)))
-    # read_trajs()
+    print(trip)
+    print(ts)
     
     
     

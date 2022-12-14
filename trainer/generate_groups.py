@@ -9,14 +9,14 @@ import random
 from tqdm import tqdm
 
 '''
-xyt转换为时空id
+xytchange to Spatio-Temporal id
 '''
 def xyt2id(x, y, t, x_size, y_size):
     return t*(x_size*y_size)+y*x_size+x
 
 ''' 
-创建模拟轨迹
-最大轨迹编号为x_size*y_size*t_size-1
+Creating simulated trajectories
+The max number of trajectory is x_size*y_size*t_size-1
 '''
 def create_trj(x_size, y_size, t_size,trj_num,trj_len):
     all_trjs = []
@@ -53,7 +53,7 @@ def create_trj(x_size, y_size, t_size,trj_num,trj_len):
 
 
 '''
-求两个有序序列的公共序列
+Find the common sequence of two ordered sequences
 '''
 def commom_vals(m, n):
     minLen = min(len(m),len(n))
@@ -76,8 +76,8 @@ def commom_vals(m, n):
 
 
 '''
-输出每条轨迹属于哪个组的映射，列表形式
-若不属于某个组，则赋值为-1
+Output the mapping of which group each track belongs to, in list form
+If it does not belong to a group, the value is -1
 '''
 def trj2groupId(all_groups,trj_num):
     gIDs = [-1]*trj_num
@@ -89,12 +89,12 @@ def trj2groupId(all_groups,trj_num):
 
 
 ''' 
-输出全部的group
+Output all group
 '''
 def get_groups(trjs, min_lifetime, min_group_trj_nums):
     all_common_pairs = []
     ''' 
-    记录所有的group
+    recording all group
     '''
     all_groups = []
     all_grouped_sets = set()
@@ -103,7 +103,7 @@ def get_groups(trjs, min_lifetime, min_group_trj_nums):
             continue;
         common_pairs = []
         for j in range(i+1,trj_num):
-            ''' 对已经形成group的轨迹，不再去组成新的group '''
+            ''' For the track that has formed a group, no new group will be formed '''
             if j in all_grouped_sets:
                 continue;
             cvals = commom_vals(trjs[i],trjs[j])
@@ -128,7 +128,7 @@ def get_groups(trjs, min_lifetime, min_group_trj_nums):
     
 if __name__ == "__main__":
     '''
-    生成100K只需要7s
+    It only takes 7 seconds to produce 100K
     '''
     x_size, y_size, t_size = 10, 10, 20
     space_cell_num = x_size*y_size
@@ -137,8 +137,8 @@ if __name__ == "__main__":
     trjs = create_trj(x_size, y_size, t_size,trj_num,trj_len)
     
     ''' 
-    记录有共同元素的轨迹对
-    返回轨迹集构成的所有 group
+    trajectory pairs with common elements are recorded
+    Returns all groups of the trajectories
     '''
     min_lifetime = 2
     min_group_trj_nums = 2
