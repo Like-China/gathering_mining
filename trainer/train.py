@@ -11,31 +11,9 @@ import logging
 import settings as constants
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 import numpy as np
-from data.porto.porto1500350.evaluator.evaluate import get_recall
+from index.scan import  get_communities
 from baselines.GS_ACMC import ACMC
-
-
-def common_values(m, n):
-    """
-    Find the common sequence of two ordered sequences
-    Some pre-checking strategy base of min_lifetime 
-    """
-    len_m = len(m)
-    len_n = len(n)
-    # Two Pointers to two arrays
-    i, j = 0, 0
-    # Recording common values
-    common_value = []
-    while i < len_m and j < len_n:
-        if m[i] == n[j]:
-            common_value.append(m[i])
-            i += 1
-            j += 1
-        elif m[i] < n[j]:
-            i += 1
-        else:
-            j += 1
-    return common_value
+from tqdm import tqdm
 
 
 def init_parameters(model):
@@ -121,6 +99,73 @@ def t2vec(m0, token_sequences):
     return res[m0.num_layers - 1].tolist()
 
 
+# 快速计算欧式距离
+def euclidean_dist(x, y):
+    """
+    Args:
+      x: pytorch Variable, with shape [m, d]
+      y: pytorch Variable, with shape [n, d]
+    Returns:
+      dist: pytorch Variable, with shape [m, n]
+    """
+
+    m, n = x.size(0), y.size(0)
+    # xx经过pow()方法对每单个数据进行二次方操作后，在axis=1 方向（横向，就是第一列向最后一列的方向）加和，此时xx的shape为(m, 1)，经过expand()方法，扩展n-1次，此时xx的shape为(m, n)
+    xx = torch.pow(x, 2).sum(1, keepdim=True).expand(m, n)
+    # yy会在最后进行转置的操作
+    yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, m).t()
+    dist = xx + yy
+    # torch.addmm(beta=1, input, alpha=1, mat1, mat2, out=None)，这行表示的意思是dist - 2 * x * yT
+    dist.addmm_(1, -2, x, y.t())
+    # clamp()函数可以限定dist内元素的最大最小范围，dist最后开方，得到样本之间的距离矩阵
+    dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+    return dist
+
+
+# 输入一组轨迹，编码成向量被输出聚类标签
+def vec_cluster(trjs, m0, args):
+    a_h = t2vec(m0, trjs)
+    if args.c_method == 1:
+        c = KMeans(n_clusters=constants.n).fit(a_h)
+    elif args.c_method == 2:
+        c = DBSCAN(eps=constants.ep, min_samples=constants.min_group_trj_nums).fit(a_h)
+    elif args.c_method == 3:
+        c = AgglomerativeClustering(n_clusters=constants.n).fit(a_h)
+    else:
+        pairs = []
+        # 查找一组CLS>min_length的轨迹对的距离作为下面的参考值
+        anchor_value = []
+        count = 100
+        a_h = torch.tensor(a_h)
+        dists = euclidean_dist(a_h, a_h)
+        for ii in tqdm(desc='get anchor', len(trjs)):
+            for jj in range(ii+1, len(trjs)):
+                trj1, trj2 = trjs[ii], trjs[jj]
+                cvals1= list(set(trj1).intersection(set(trj2)))
+                if len(cvals1)>constants.min_lifetime:
+                    count +=1
+                    anchor_value.append(dists[ii][jj])
+        anchor_value = np.mean(anchor_value)
+        print("anchor={}".format(anchor_value))
+
+
+        for ii in tqdm(range(len(dists))):
+            for jj in range(ii + 1, len(dists)):
+                dist = dists[ii][jj]
+                if dist <= anchor_value:
+                    pairs.append([ii, jj])
+        print("找到Pair数: {}".format(len(pairs)))
+        communities, hubs, outliers = get_communities(pairs, constants.min_group_trj_nums, constants.ep)
+        labels = [-1] * len(a_h)
+        for ii in range(len(communities)):
+            for trj_id in communities[ii]:
+                labels[trj_id] = ii
+        print(
+            '归组人数:{0}\t未归组人数：{1}\t组数：{2}'.format(sum(np.array(labels) != -1), sum(np.array(labels) == -1),
+                                                 len(communities)))
+    return labels if args.c_method == 0 else c.labels_
+
+
 def get_apn(trjs, m0, args):
     """
     Enter a set of trajectories a[src, lengths, invp], 5 components were randomly selected from each group
@@ -131,16 +176,9 @@ def get_apn(trjs, m0, args):
             3.2 a-n Not in the same group but grouped into the same group
     """
     # m0.eval()
-    a_h = t2vec(m0, trjs)
-    # cluster_start_time = time.time()
-    if args.c_method == 1:
-        c = KMeans(n_clusters=constants.n).fit(a_h)
-    elif args.c_method == 2:
-        c = DBSCAN(eps=constants.eps, min_samples=constants.mt).fit(a_h)
-    else:
-        c = AgglomerativeClustering(n_clusters=constants.n).fit(a_h)
-    # print("Clustering time :  "+str(time.time()-cluster_start_time))
-    labels = c.labels_
+    cluster_start_time = time.time()
+    labels = vec_cluster(trjs, m0, args)
+    print("Clustering time :  "+str(time.time()-cluster_start_time))
     # apn_start_time = time.time()
     apns = []
     for i in range(constants.n):
@@ -150,15 +188,16 @@ def get_apn(trjs, m0, args):
         non_trj_cluster = np.array(trjs)[non_cluster].tolist()
         for mm in range(len(trj_cluster)):
             for jj in range(mm + 1, len(trj_cluster)):
-                if len(common_values(trj_cluster[mm], trj_cluster[jj])) < constants.min_lifetime:
+                common_num1 = list(set(trj_cluster[mm]).intersection(set(trj_cluster[jj])))
+                if len(common_num1) < constants.min_lifetime:
                     # an = [cluster[mm], cluster[jj]]
                     for nn in range(len(non_trj_cluster)):
-                        if len(common_values(trj_cluster[mm], non_trj_cluster[nn])) > constants.min_lifetime:
+                        common_num2 = list(set(trj_cluster[mm]).intersection(set(non_trj_cluster[nn])))
+                        if len(common_num2) >= constants.min_lifetime:
                             apns.append([cluster[mm], non_cluster[nn], cluster[jj]])
-            if len(apns) > args.max_apn_num:
-                break
-        if len(apns) > args.max_apn_num:
-            break
+            if len(apns) > args.max_apn_num: break
+        if len(apns) > args.max_apn_num: break
+
     # print("get a p n"+str(time.time()-apn_start_time))
     # m0.train()
     if len(apns) == 0:
@@ -175,137 +214,66 @@ def get_apn(trjs, m0, args):
     return a, p, n
 
 
-def get_apn1(trjs, m0, args):
-    """
-    Enter a set of trajectories a[src, lengths, invp], 5 components were randomly selected from each group
-        1. The forward calculation get the representative vector
-        2. Cluster representative vectors
-        3. select a.p.n for accelerate the model convergence
-            3.1 a-p They belong to the same group but are clustered into different classes
-            3.2 a-n Not in the same group but grouped into the same group
-    """
-    # m0.eval()
-
-    a_h = t2vec(m0, trjs)
-    # cluster_start_time = time.time()
-    if args.c_method == 1:
-        c = KMeans(n_clusters=constants.n).fit(a_h)
-    elif args.c_method == 2:
-        c = DBSCAN(eps=constants.eps, min_samples=constants.mt).fit(a_h)
-    else:
-        c = AgglomerativeClustering(n_clusters=constants.n).fit(a_h)
-    # print("clustering time:  "+str(time.time()-cluster_start_time))
-    labels = c.labels_
-
-    group_start_time = time.time()
-    greedy = ACMC()
-    pairs, groups, trj_map_group = greedy.get_groups(trjs)
-    print("ACMC group time: ", time.time() - group_start_time)
-    # apn_start_time = time.time()
-    apns = []
-    start = 0
-    for group_id in range(start, len(groups)):
-        g = groups[group_id]
-        apn = []
-        for ii in range(len(g)):
-            a_id = g[ii]
-            a_label = labels[a_id]
-            for jj in range(ii + 1, len(g)):
-                p_id = g[jj]
-                p_label = labels[p_id]
-                if a_label != p_label:
-                    nns_ids = np.array(range(len(labels)))[labels == a_id]
-                    for n_id in nns_ids:
-                        nn_group = trj_map_group[n_id]
-                        if nn_group != group_id:
-                            apn.append([a_id, p_id, n_id])
-        if len(apn) > 0:
-            apns.append(apn)
-        if len(apns) != 0 and len(sum(apns, [])) > args.max_apn_num:
-            break
-    # print("get a p n"+str(time.time()-apn_start_time))
-    m0.train()
-
-    if len(apns) == 0:
-        print('no valid apn')
-        return [], [], []
-    apns = sum(apns, [])
-    a_src, p_src, n_src = [], [], []
-    for a_id, p_id, n_id in apns[0:args.max_apn_num]:
-        a_src.append(trjs[a_id])
-        p_src.append(trjs[p_id])
-        n_src.append(trjs[n_id])
-    a = pad_arrays_pair(a_src)
-    p = pad_arrays_pair(p_src)
-    n = pad_arrays_pair(n_src)
-    return a, p, n
-
-
-def validate(validate_loader, m0, args, all_groups):
+def validate(validate_loader, m0,  args, real_labels):
     """
     Validation capture genLoss, which is the true validation set loss
     """
     m0.eval()
-    epoch = validate_loader.size // constants.val_batch
     recalls = []
-    precisions = []
-
-    for ii in range(epoch):
-        if len(all_groups[ii]) == 0:
-            continue
-        grouped_ids = sum(all_groups[ii], [])
+    for epoch in range(validate_loader.size // constants.val_batch):
+        # 当前轮次的真实标签
+        real_label = real_labels[epoch]
+        if real_label is None: continue
         # t1 = time.time()
-        trjs = validate_loader.all_trjs[ii * constants.val_batch:(ii + 1) * constants.val_batch]
+        trjs = validate_loader.all_trjs[epoch * constants.val_batch:(epoch + 1) * constants.val_batch]
+        # 得到聚类标签
+        predict_label = vec_cluster(trjs, m0, args)
+        # 未满人数限制的全部记录为-1
+        predict_label = np.array(predict_label)
 
-        a_h = t2vec(m0, trjs)
-        if args.c_method == 1:
-            c = KMeans(n_clusters=constants.n).fit(a_h)
-        elif args.c_method == 2:
-            c = DBSCAN(eps=constants.eps, min_samples=constants.mt).fit(a_h)
-        else:
-            c = AgglomerativeClustering(n_clusters=constants.n).fit(a_h)
-        labels = c.labels_
-        # print('model time :', time.time()-t1)
+        valid_cluster_count = 0
+        for item in set(predict_label):
+            class_index = np.where(predict_label==item)
+            if len(class_index)<constants.min_group_trj_nums:
+                predict_label[class_index] = -1
+            else:
+                valid_cluster_count
+        print("预测划分为{}类, 有效类为{}类".format(len(set(predict_label)),valid_cluster_count))
 
-        co_pair_num = 0
-        al_pair_num = 0
-        for i in range(constants.n):
-            cluster = np.where(labels == i)[0].tolist()
-            trj_cluster = np.array(trjs)[cluster].tolist()
-            for mm in range(len(trj_cluster)):
-                if cluster[mm] not in grouped_ids:
-                    continue
-                for jj in range(mm + 1, len(trj_cluster)):
-                    if cluster[jj] not in grouped_ids:
-                        continue
-                    if len(common_values(trj_cluster[mm], trj_cluster[jj])) >= constants.min_lifetime:
-                        co_pair_num += 1
-                    al_pair_num += 1
-        precisions.append(co_pair_num / max(1, al_pair_num))
 
-        recalls.append(get_recall(labels, all_groups[ii]))
-
-    print("Average accuracy of validation sets: {0:.3f}".format(np.mean(precisions) * 100))
+        # 计算召回率
+        TP, FP, TN, FN = 0, 0, 0, 0
+        for ii in range(len(real_label)):
+            for jj in range(ii+1, len(real_label)):
+                if real_label[ii] == real_label[jj]:
+                    if predict_label[ii] == predict_label[jj]:
+                        TP += 1
+                    else:
+                        FN += 1
+                else:
+                    if predict_label[ii] == predict_label[jj]:
+                        FP += 1
+                    else:
+                        TN += 1
+        print(TP, FN, FP, TN)
+        recalls.append(TP/(TP+FN))
     print("Average recall rate of validation sets： {0:.3f}".format(np.mean(recalls)))
     m0.train()
-    return np.mean(precisions) * 100
+    return np.mean(recalls) * 100
 
 
 def train(args):
     logging.basicConfig(filename=os.path.join(args.data, "training.log"), level=logging.INFO)
     train_loader, validate_loader = load_data(args)
-    vocal_size = max(train_loader.maxID, validate_loader.maxID) + 8
-    print("vocal_size= {}".format(vocal_size))
-    epoch = validate_loader.size // constants.val_batch
-    acmc_pairs, acmc_groups, acmc_maps = [], [], []
-    for ii in range(epoch):
+    vocal_size = max(train_loader.maxID, validate_loader.maxID)+1
+    print("vocal_size= {} min_id = {} max_id = {}".format(vocal_size,
+                min(train_loader.minID, validate_loader.minID), max(train_loader.maxID, validate_loader.maxID)))
+    # 对于每一批，先使用ACMC获得组划分ground-truth, 只用计算一次(LCS+SCAN)
+    real_labels = []
+    for ii in range(validate_loader.size // constants.val_batch):
         validate_batch = validate_loader.all_trjs[ii * constants.val_batch:(ii + 1) * constants.val_batch]
-        greedy = ACMC()
-        pairs, groups, trj_map_group = greedy.get_groups(validate_batch)
-        acmc_pairs.append(pairs)  # pair = [id1, id2, common_values]
-        acmc_groups.append(groups)
-        acmc_maps.append(trj_map_group)
-
+        real_label = ACMC().get_groups(validate_batch)
+        real_labels.append(real_label)
     triplet_loss = nn.TripletMarginLoss(margin=0.5, p=2)
     m0 = EncoderDecoder(args, vocal_size)
     if args.cuda and torch.cuda.is_available():
@@ -346,22 +314,23 @@ def train(args):
                 if iteration % args.print_freq == 0:
                     print("The number of apn:{0}  difference ： {1}".format(len(a.src[0]), diff))
 
-            a1, p1, n1 = train_loader.get_apn_cross()
-            if len(a) != 0:
-                diff, t_loss1 = get_triplet_loss(a1, p1, n1, m0, triplet_loss, args)
-                if iteration % args.print_freq == 0:
-                    print("The number of apn:{0}  difference ： {1}".format(len(a1.src[0]), diff))
+            # a1, p1, n1 = train_loader.get_apn_cross()
+            # if len(a) != 0:
+            #     diff, t_loss1 = get_triplet_loss(a1, p1, n1, m0, triplet_loss, args)
+            #     if iteration % args.print_freq == 0:
+            #         print("The number of apn:{0}  difference ： {1}".format(len(a1.src[0]), diff))
 
-            a2, p2, n2 = train_loader.get_inner_apn()
-            if len(a2) != 0:
-                diff, inner_loss = get_triplet_loss(a2, p2, n2, m0, triplet_loss, args)
-                if iteration % args.print_freq == 0:
-                    print("The number of apn:{0}  difference ： {1}".format(len(a2.src[0]), diff))
-            a3, p3, n3 = train_loader.get_common_apn()
-            if len(a3) != 0:
-                diff, common_loss = get_triplet_loss(a3, p3, n3, m0, triplet_loss, args)
-                if iteration % args.print_freq == 0:
-                    print("The number of apn:{0}  difference ： {1}".format(len(a3.src[0]), diff))
+            # a2, p2, n2 = train_loader.get_inner_apn()
+            # if len(a2) != 0:
+            #     diff, inner_loss = get_triplet_loss(a2, p2, n2, m0, triplet_loss, args)
+            #     if iteration % args.print_freq == 0:
+            #         print("The number of apn:{0}  difference ： {1}".format(len(a2.src[0]), diff))
+
+            # a3, p3, n3 = train_loader.get_common_apn()
+            # if len(a3) != 0:
+            #     diff, common_loss = get_triplet_loss(a3, p3, n3, m0, triplet_loss, args)
+            #     if iteration % args.print_freq == 0:
+            #         print("The number of apn:{0}  difference ： {1}".format(len(a3.src[0]), diff))
             loss = 0.5*(t_loss + t_loss1) + 0.5*(inner_loss + common_loss)
             if loss.item() == 0:
                 continue
@@ -379,7 +348,7 @@ def train(args):
             if iteration % args.save_freq == args.save_freq - 1:
                 is_best = False
                 if loss.item() != 0 and loss.item() < best_train_loss:
-                    recall = validate(validate_loader, m0, args, acmc_groups)
+                    recall = validate(validate_loader, m0, args, real_labels)
                     print("current recall:{}\n best recall: {}".format(recall, best_recall))
                     if recall > best_recall:
                         best_train_loss = loss.item()

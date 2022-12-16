@@ -3,7 +3,7 @@ from funcy import merge
 import numpy as np
 import settings as constants
 import settings as settings
-import h5py
+from tqdm import tqdm
 
 
 class ECMC:
@@ -16,9 +16,9 @@ class ECMC:
 
         if point_a[2] != point_b[2]:
             return False
-        if abs(point_a[0] - point_b[0]) > settings.scale:
+        if abs(point_a[0] - point_b[0]) > settings.scale/10:
             return False
-        if abs(point_a[1] - point_b[1]) > settings.scale:
+        if abs(point_a[1] - point_b[1]) > settings.scale/10:
             return False
         return True
     
@@ -52,7 +52,7 @@ class ECMC:
         # t1 = time.time()
         all_pairs = []
         trj_num = len(seqs)
-        for i in range(trj_num):
+        for i in tqdm(range(trj_num), desc='get pairs'):
             pairs = []
             for j in range(i + 1, trj_num):
                 common_point = self.common_points(seqs[i], seqs[j])
@@ -60,7 +60,6 @@ class ECMC:
                     pairs.append([i, j, common_point])
             if len(pairs) >= self.min_group_trj_nums:
                 all_pairs.append(pairs)
-        # print('The time-consuming of getting all pairs:' + str(time.time() - t1))
         return all_pairs
 
     def get_groups(self, seqs):
@@ -70,6 +69,7 @@ class ECMC:
         :return:
         """
         all_pairs = self.get_pairs(seqs)
+        print(len(all_pairs))
         all_groups = []
         grouped_set = set()
         for pairs in all_pairs:
@@ -107,21 +107,23 @@ if __name__ == "__main__":
     e = ECMC()
     trajectories = []
 
-    for ii in range(1000):
+    for ii in range(10000):
         trajectory = []
-        t = sorted(np.random.randint(0, 1000, 10).tolist())
+        t = sorted(np.random.randint(0, 10, 100).tolist())
         for jj in range(10):
             lon = np.random.random()*settings.scale
             lat = np.random.random()*settings.scale
-            trajectory.append([lon, lat, 100])
+            trajectory.append([lon, lat, 10])
         trajectories.append(trajectory)
 
-    trajectory_a = trajectories[0]
-    trajectory_b = trajectories[1]
-    print(trajectory_a)
-    print(trajectory_b)
-    common_point = e.common_points(trajectory_a, trajectory_b)
-    print(common_point)
-    # all_pairs, all_groups, trj_map_group = e.get_groups(trajectories)
+    # for ii in tqdm(range(len(trajectories)-1)):
+    #     trajectory_a = trajectories[ii]
+    #     trajectory_b = trajectories[ii+1]
+    #     common_point = e.common_points(trajectory_a, trajectory_b)
+    # print(common_point)
+    import time
+    t1 = time.time()
+    all_pairs, all_groups, trj_map_group = e.get_groups(trajectories)
+    print(time.time()-t1)
     # print(all_pairs)
     # print(all_groups)

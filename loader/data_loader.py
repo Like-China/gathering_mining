@@ -17,7 +17,7 @@ class DataLoader:
         self.all_trjs = []
         self.size = 0
 
-    def load(self, max_num=1000):
+    def load(self, max_num):
         stream = open(self.srcfile, 'r')
         num_line = 0
         with tqdm(total=max_num, desc='Read trajectory file', leave=True, ncols=100, unit='B', unit_scale=True) as pbar:
@@ -92,6 +92,7 @@ class DataLoader:
             sub1 = random_subseq(trg, rate)
             sub2 = random_subseq(trg, rate)
             sub3 = random_subseq(trg, rate)
+            # 经测试下面函数比自己写的函数快
             common_num1 = list(set(sub1).intersection(set(sub2)))
             common_num2 = list(set(sub1).intersection(set(sub3)))
 
@@ -115,34 +116,18 @@ class DataLoader:
         Get three batch number of track sets, a, p, n
         The center of the trajectory in a is closer to the trajectory in p
         """
-        def common_values(m, n):
-            len_m = len(m)
-            len_n = len(n)
-            i, j = 0, 0
-            common_value = []
-            while i < len_m and j < len_n:
-                if m[i] == n[j]:
-                    common_value.append(m[i])
-                    i += 1
-                    j += 1
-                elif m[i] < n[j]:
-                    i += 1
-                else:
-                    j += 1
-            return common_value
 
         a_src = self.get_batch()[0: 100]
         p_src = self.get_batch()[0: 100]
         n_src = self.get_batch()[0: 100]
 
         for i in range(len(a_src)):
-            # a_mta[i] float32[] [id, t]
-            if len(common_values(a_src[i], p_src[i])) < len(common_values(a_src[i], n_src[i])):
+            common_num1 = list(set(a_src[i]).intersection(set(p_src[i])))
+            common_num2 = list(set(a_src[i]).intersection(set(n_src[i])))
+            if len(common_num1) < len(common_num2):
                 p_src[i], n_src[i] = n_src[i], p_src[i]
 
         a = pad_arrays_pair(a_src)
         p = pad_arrays_pair(p_src)
         n = pad_arrays_pair(n_src)
         return a, p, n
-
-

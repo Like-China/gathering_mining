@@ -5,17 +5,16 @@ Created on Mon Jan  4 17:46:09 2021
 @author: likem
 
 Each trajectory point is converted into token value by dividing space and time
-Read the trajectory of the h5 files, Write in 
-./data/city_name/cityname_regionScale_timeScale/train.src
-./data/city_name/cityname_regionScale_timeScale/train1.trg
-./data/city_name/cityname_regionScale_timeScale/val.src
-./data/city_name/cityname_regionScale_timeScale/val.trg
+Read the trajectory of the h5 files, Write out train dataset and test dataset
+2022/12/14 验证无误
 """
 import os
 import numpy as np
 import warnings, argparse, h5py, time
 import settings
 warnings.filterwarnings("ignore")
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 
 def set_region_args():
@@ -56,8 +55,10 @@ class Region:
         input：
         args  Set training parameters
         output：
-        ./data/city/cityname_regionScale_timeScale/train.src
-        ./data/city/cityname_regionScale_timeScale/val.src
+        ./data/city/cityname_regionScale_timeScale/train
+        ./data/city/cityname_regionScale_timeScale/val
+        ./data/city/cityname_regionScale_timeScale/train_raw
+        ./data/city/cityname_regionScale_timeScale/val_raw
     '''
 
     def __init__(self):
@@ -66,25 +67,21 @@ class Region:
         self.save_path = os.path.join('../data', self.args.city, self.args.city+str(int(self.args.scale*100000))+str(self.args.time_size))
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path)
-        self.h5path = os.path.join("E://data", self.args.city+".h5")
+        self.h5path = os.path.join("/home/like/data", self.args.city+".h5")
+        # self.h5path = os.path.join("E:\\data\porto.h5")
         print("parameter setting： \n", self.args)
 
-    def write(self, f, train_num, val_num, is_train):
-        write_or_add = 'w'
-        train_or_val = 'train' if is_train else 'val'
-        start = 0 if is_train else train_num
-        num = train_num if is_train else val_num
-        val_num = 0
-
-        writer = open(os.path.join(self.save_path, '{}'.format(train_or_val)), write_or_add)
-
-        for i in range(start, start + num):
-            trip = np.array(f.get('trips/' + str(i + 1)))  # numpy n*2
-            ts = np.array(f.get('timestamps/' + str(i + 1)), dtype=np.int32)  # numpy n*1
-
+    def write(self, raw_trips, raw_tss, train_or_val_or_test):
+        f = h5py.File(self.h5path, 'r')
+        num = len(raw_trips)
+        writer = open(os.path.join(self.save_path, '{}'.format(train_or_val_or_test)), 'w')
+        writer_raw = open(os.path.join(self.save_path, '{}_raw'.format(train_or_val_or_test)), 'w')
+        output_num = 0
+        for i in tqdm(range(num),desc="output train/test data"):
+            trip, ts = raw_trips[i], raw_tss[i]
+            # divide long trj into short trj
             if len(trip) > settings.max_len:
-                trips = []
-                tss = []
+                trips, tss = [], []
                 while len(trip) >= settings.max_len:
                     rand_len = np.random.randint(settings.min_len, settings.max_len)
                     trips.append(trip[0:rand_len])
@@ -98,28 +95,65 @@ class Region:
                 trips = [trip]
                 tss = [ts]
 
+            # tr [ [lon, lat], [lon,lat], ...]  ts [timestamp,timestamp,...] of a trip
             for tr, ts in zip(trips, tss):
                 if settings.min_len <= len(tr) <= settings.max_len:
-                    mapIDs = self.trip2mapIDs(tr, ts)
-                    val_num += 1
-                    src_seq = ' '.join([str(id) for id in mapIDs])
+                    raw_trj, map_ids = self.trip2mapIDs(tr, ts)
+                    src_seq = ' '.join([str(id) for id in map_ids])
                     writer.writelines(src_seq)
                     writer.write('\n')
-            if i % 10000 == 0:
-                print("{}schedule：{}/{} ,{}".format(train_or_val, i-start, num, time.ctime()))
+                    raw_seq = " ".join([str(id) for id in raw_trj])
+                    writer_raw.writelines(raw_seq)
+                    writer_raw.write('\n')
+                    output_num += 1
         writer.close()
-        return val_num
+        writer_raw.close()
+        return output_num
 
-    # Divide the training set and test set and write the file train.src/ train.trg/ val.trg/ val.src
-    def output_train_validate(self, train_ratio=settings.train_ratio, is_samll=True):
-        f = h5py.File(self.h5path, 'r')
-        trj_nums = f.attrs['num'] if not is_samll else 120000
-        train_num = int(train_ratio*trj_nums)
-        val_num = trj_nums - train_num
-        print("Theoretically should generate the number of training set, test set trajectories", train_num, val_num)
-        train_num = self.write(f, train_num, val_num, True)
-        val_num = self.write(f, train_num, val_num, False)
-        print("Limit the length of the training set, the number of test set trajectories", train_num, val_num)
+    def observe(self, raw_trj, map_ids):
+        plt.figure()
+        for point in raw_trj:
+            plt.scatter(point[0], point[1])
+        plt.show()
+        plt.figure()
+        for id in map_ids:
+            spid = self.mapId2spaceId(id)
+            x, y = self.spaceId2offset(spid)
+            plt.scatter(x, y)
+        plt.show()
+
+    # Divide the training set and test set and write the file train/ train_raw/ val/ val_raw
+    def output_train_validate(self, read_trj_num):
+        # get the required number of data in train dataset
+        f = h5py.File(os.path.join("/home/like/data", "porto.h5"), 'r')
+        trj_nums = min(f.attrs['num'], read_trj_num)
+        train_num = int(settings.train_ratio * trj_nums)
+        val_num = int(settings.val_ratio * trj_nums)
+        test_num = trj_nums - train_num - val_num
+        train_trips, train_ts, val_trip, val_ts, test_trip, test_ts = [], [], [], [], [], []
+
+        for i in tqdm(range(1, trj_nums+1), desc='read raw trips'):
+            trip = np.array(f.get('trips/%d' % i))  # numpy n*2
+            if i<= train_num:
+                train_trips.append(trip)
+            elif i<=val_num+train_num:
+                val_trip.append(trip)
+            else:
+                test_trip.append(trip)
+        for i in tqdm(range(1, trj_nums+1), desc='read raw timestamp'):
+            ts = np.array(f.get('timestamps/%d' % i))  # numpy n*1
+            if i <= train_num:
+                train_ts.append(ts)
+            elif i <= val_num + train_num:
+                val_ts.append(ts)
+            else:
+                test_ts.append(ts)
+        print("The total number of trjs is %d, we select %d trjs form them" %(f.attrs['num'], trj_nums))
+        print("Theoretically should generate the number of training/val/ test set trajectories", train_num, val_num, test_num)
+        train_num = self.write(train_trips, train_ts, 'train')
+        val_num = self.write(val_trip, val_ts, 'val')
+        test_num = self.write(test_trip, test_ts, 'test')
+        print("After limiting the length of the training set, the number of training/val/ test trajectories", train_num, val_num, test_num)
         f.close()
     '''
     ****************************************************************************************************************************************************
@@ -170,14 +204,19 @@ class Region:
     
     def trip2mapIDs(self, trip, ts):
         map_ids = []
+        raw_trj = []
         for (lon, lat), t in zip(trip, ts):
             space_id = self.gps2spaceId(lon, lat)
             t = int(t) // self.args.time_span
             map_id = int(self.spaceId2mapId(space_id, t))
             map_ids.append(map_id)
-        return list(map_ids)
+            raw_trj.append([lon, lat, t])
+        return raw_trj, map_ids
 
-    
+
 if __name__ == "__main__":
     r = Region()
-    r.output_train_validate(is_samll=True)
+    r.output_train_validate(read_trj_num=10000000)
+
+
+

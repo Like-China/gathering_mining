@@ -1,42 +1,18 @@
-import torch
-import os
+import torch,os
 from trainer.models import EncoderDecoder
-from loader.data_utils import pad_arrays_keep_invp
-from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from loader.data_utils import  pad_arrays_pair,pad_arrays_keep_invp
+from settings import set_args
 import numpy as np
 import time
-from baselines.GS_ACMC import ACMC
-from baselines.GS_ECMC import ECMC
-import settings
-import h5py
-from loader.data_loader import DataLoader
+import settings as constants
+from index.scan import  get_communities
+from tqdm import tqdm
 
-
-def common_values(m, n):
-    """
-    Find the common sequence of two ordered sequences
-    Some pre-checking strategy base of min_lifetime 
-    """
-    len_m = len(m)
-    len_n = len(n)
-    # Two Pointers to two arrays
-    i, j = 0, 0
-    # Recording common values
-    common_value = []
-    while i < len_m and j < len_n:
-        if m[i] == n[j]:
-            common_value.append(m[i])
-            i += 1
-            j += 1
-        elif m[i] < n[j]:
-            i += 1
-        else:
-            j += 1
-    return common_value
-
-
-def t2vec(args, trj_src, vocab_size):
-    m0 = EncoderDecoder(args, vocab_size)
+def t2vec(args, data):
+    "read source sequences from trj.t and write the tensor into file trj.h5"
+    m0 = EncoderDecoder(args.vocab_size, args.embedding_size,
+                        args.hidden_size, args.num_layers,
+                        args.dropout, args.bidirectional)
     if os.path.isfile(args.checkpoint):
         print("=> loading checkpoint '{}'".format(args.checkpoint))
         checkpoint = torch.load(args.checkpoint)
@@ -44,274 +20,125 @@ def t2vec(args, trj_src, vocab_size):
         if torch.cuda.is_available():
             m0.cuda()
         m0.eval()
-        vectors = []
-        src, lengths, invp = trj_src[0], trj_src[1], trj_src[2]
+        vecs = []
+        src, lengths, invp = data[0], data[1], data[2]
         if torch.cuda.is_available():
             src, lengths, invp = src.cuda(), lengths.cuda(), invp.cuda()
-        h, _ = m0.encoder(src, lengths)  # [Layers*2，Number of trajectories in this group，Number of hidden layers][6，settings.n，128]
+        h, _ = m0.encoder(src, lengths) # 【层数*双向2，该组轨迹个数，隐藏层数】【6，constants.n，128】
         h = m0.encoder_hn2decoder_h0(h)
         h = h.transpose(0, 1).contiguous()
-        vectors.append(h[invp].cpu().data)
-        vectors = torch.cat(vectors)  # [10,3,256]
-        vectors = vectors.transpose(0, 1).contiguous()  # [3,10,256]
+        vecs.append(h[invp].cpu().data)
+        
+        vecs = torch.cat(vecs) # [10,3,256]
+        vecs = vecs.transpose(0, 1).contiguous()  ## [3,10,256]
     else:
         print("=> no checkpoint found at '{}'".format(args.checkpoint))
-    return vectors[m0.num_layers-1].tolist()
+    return vecs[m0.num_layers-1].tolist()
 
 
-def clustering(vectors):
+def clustering(vecs):
     t1 = time.time()
-    if settings.c_method == 1:
-        c = KMeans(n_clusters=settings.n).fit(vectors)
-    elif settings.c_method == 2:
-        c = DBSCAN(eps=settings.eps, min_samples=settings.mt).fit(vectors)
+    if constants.c_method == 1:
+        c = KMeans(n_clusters=constants.n).fit(vecs)
+    elif constants.c_method == 2:
+        c = DBSCAN(eps=constants.eps, min_samples=constants.mt).fit(vecs)
     else:
-        c = AgglomerativeClustering(n_clusters=settings.n).fit(vectors)
-    print('Clustering time：'+str(time.time()-t1))
+        c = AgglomerativeClustering(n_clusters=constants.n).fit(vecs)
+    print('聚类用时：'+str(time.time()-t1))
     return c.labels_
 
 
-def get_recall(labels, all_groups):
-    TP_count = 0
-    FN_count = 0
-    for g in all_groups:
-        for i in range(len(g)):
-            if labels[g[i]] == -1:
-                continue
-            for j in range(i+1, len(g)):
-                if labels[g[j]] == -1:
-                    continue
-                if labels[g[i]] == labels[g[j]]:
-                    TP_count += 1
-                else:
-                    FN_count += 1
-    recall = TP_count*100/(TP_count+FN_count)
-    return recall
+# 对向量聚类后, 每个聚类分别计算group
+def group_by_cluster(labels, all_trjs):
+    t1 = time.time()
+    all_groups1 = []
+    all_group_cvs1 = []
+    for i in range(constants.n):
+        # 取出每个聚类中的轨迹
+        cluster = np.where(labels == i)[0].tolist()
+        trjs = np.array(all_trjs)[cluster].tolist()
+        groups, group_cvs = get_groups(trjs, constants.min_lifetime
+                                              ,constants.min_group_trj_nums)
+        if len(groups)>0:
+            all_groups1.append(groups)
+            all_group_cvs1.append(group_cvs)
+            
+    if len(all_groups1) > 0:
+        all_groups1 = sum(all_groups1, [])
     
+    
+    t2g2 = [-1]*len(all_trjs)
+    for ii in range(len(all_groups1)):
+        for trj_id in all_groups1[ii]:
+            t2g2[trj_id] = ii
+    t2 = time.time()
+    print('cluster+regroup得到的组数：{}'.format(len(all_groups1)))
+    print('cluster+regroup用时：{}'.format(t2-t1))
+    return all_groups1, all_group_cvs1, t2g2
 
-# Gets all the original traces of the test set
-def get_raw_trajectory():
-    # Get the original track data of all validation sets
-    trajectories = []
-    train_ratio = settings.train_ratio
-    with h5py.File("E:/data/beijing.h5", 'r') as f:
-        trj_nums = f.attrs['num']
-    train_num = int(train_ratio * trj_nums)
-    with h5py.File("E:/data/beijing.h5", 'r') as f:
-        for i in range(train_num, trj_nums):
-            trip = np.array(f.get('trips/' + str(i + 1)))
-            ts = np.array(f.get('timestamps/' + str(i + 1)))
-            trajectory = []
-            time_span = 86400 // settings.time_size
-            for (lon, lat), t in zip(trip, ts):
-                trajectory.append([lon, lat, int(t) // time_span])
-            trajectories.append(trajectory)
-    return trajectories
+'''
+    对每个组的共同元素进行组合
+    若存在两个组共同元素大于 constants.min_lifetime
+    融合这两个组为一个组
+'''
+def combine_and_refine(all_groups1, all_group_cvs1, t2g2):
+    
+    combine_pair = []
+    for i in range(len(all_group_cvs1)):
+        cv1 = all_group_cvs1[i]
+        for j in range(i+1,len(all_group_cvs1)):
+            cv2 = all_group_cvs1[j]
+            if len(list(set(cv1).intersection(set(cv2))))>=constants.min_lifetime:
+                combine_pair.append([i,j])
+                break
+    # 融合组，重新建立t2g2
+    combined_G = []
+    is_uncombined = [True,]*len(all_groups1)
+    for (i,j) in combine_pair:
+        is_uncombined[i] = False
+        is_uncombined[j] = False
+        g1 = all_groups1[i]
+        g2 = all_groups1[j]
+        g1.extend(g2)
+        combined_G.append(g1)
+    # 最后的组就是取未融合的组+融合的组
+    uncombined_G = np.array(all_groups1)[is_uncombined].tolist()
+    all_groups2 = uncombined_G.extend(combined_G)
+    return combine_pair,all_groups2
 
 
-def evaluate(args):
-    ''' 1. Get a batch of trajectories
-        1.1 Exact group t2G1 of the batch track is obtained
-        1.2 Encodeing this group of trajectories
+def main():
     '''
-    # Gets the validation set original trajectory for ECMC
-    trajectories = get_raw_trajectory()[0:args.max_val_nums]
-    # Obtain all trajectory token sequences of the test set for ACMC, t2vec
-    train_loader = DataLoader(os.path.join(args.data, "train"), args.batch)
-    train_loader.load(args.max_train_num)
-    validate_loader = DataLoader(os.path.join(args.data, "val"), args.batch)
-    validate_loader.load(args.max_val_nums)
-    vocal_size = max(train_loader.maxID, validate_loader.maxID) + 8
-    print("vocal_size= {}".format(vocal_size))
-
-    # ECMC ACMC groups are calculated by batch
-    epoch = len(trajectories) // settings.val_batch
-    print(epoch)
-    for ii in range(epoch):
-        # Read a batch of validation set trajectories
-        t1 = time.time()
-        validate_batch = trajectories
-        # print(len(validate_batch[0]), validate_batch[0])
-        # print(len(validate_batch[-1]), validate_batch[-1])
-        e = ECMC()
-        all_pairs, all_groups, trj_map_group = e.get_groups(validate_batch)
-        print(all_groups)
-        print("ECMC time : ", time.time() - t1)
-
-        t1 = time.time()
-        validate_batch = validate_loader.all_trjs
-        # Get companion Pairs, companion Groups, companion trj2group in the batch trajectory
-        greedy = ACMC()
-        pairs, groups, trj_map_group = greedy.get_groups(validate_batch)
-        print(groups)
-        print("ACMC time: ", time.time() - t1)
-        print("**********")
-
-        t1 = time.time()
-        vectors = t2vec(args, pad_arrays_keep_invp(validate_batch), vocal_size)
-        labels = clustering(vectors)
-        recall = get_recall(labels, all_groups)  # recall rate after cluster
-        print("recall rate: ", recall)
-        print("Model time : ", time.time() - t1)
-
-        print("\n\n")
-
-
-def get_hit_number(args, trj_number):
-    ''' 1. Get a batch of trajectories
-        1.1 Exact group t2G1 of the batch track is obtained
-        1.2 Encodeing this group of trajectories
+        获得该批轨迹的LCS+SCAN聚类（Ground-truth)与向量距离+SCAN聚类（our mwthod)并计算召回率
     '''
-    # Gets the validation set original trajectory for ECMC
-    trajectories = get_raw_trajectory()[0:trj_number]
-    # Obtain all trajectory token sequences of the test set for ACMC, t2vec
-    train_loader = DataLoader(os.path.join(args.data, "train"), args.batch)
-    train_loader.load(args.max_train_num)
-    validate_loader = DataLoader(os.path.join(args.data, "val"), args.batch)
-    validate_loader.load(args.max_val_nums)
-    validate_loader.all_trjs = validate_loader.all_trjs[0:trj_number]
-    vocal_size = max(train_loader.maxID, validate_loader.maxID) + 8
-    print("vocal_size= {}".format(vocal_size))
+    args = set_args()
+    from loader.data_scaner import DataOrderScaner
+    scaner = DataOrderScaner(os.path.join(args.data,"val"))
+    scaner.load(10000)
+    all_trjs = scaner.srcdata
 
-
+    # 1. LCS+SCAN聚类
     t1 = time.time()
-    validate_batch = trajectories
-    e = ECMC()
-    all_pairs, all_groups, trj_map_group = e.get_groups(validate_batch)
-    hit_numbers = [len(item)*(len(item)-1)/2 for item in all_groups]
-    print("hitnum: ", np.sum(hit_numbers))
-    print("ECMC time: ", time.time() - t1)
-
-    t1 = time.time()
-    validate_batch = validate_loader.all_trjs
-    # Get companion Pairs, companion Groups, companion trj2group in the batch trajectory
-    greedy = ACMC()
-    pairs, groups, trj_map_group = greedy.get_groups(validate_batch)
-    hit_numbers = [len(item) * (len(item)-1) / 2 for item in groups]
-    print("hitnum: ", np.sum(hit_numbers))
-    print("ACMC time: ", time.time() - t1)
-    print("**********")
-
-    t1 = time.time()
-    vectors = t2vec(args, pad_arrays_keep_invp(validate_batch), vocal_size)
-    labels = clustering(vectors)
-    recall = get_recall(labels, all_groups)  # recall rate after cluster
-    print("recall rate: ", recall)
-    print("Model time : ", time.time() - t1)
-    grouped_ids = sum(all_groups, [])
-    co_pair_num = 0
-    al_pair_num = 0
-    for i in range(settings.n):
-        # Extract the trajectory in each cluster
-        cluster = np.where(labels == i)[0].tolist()
-        trj_cluster = np.array(validate_batch)[cluster].tolist()
-        for mm in range(len(trj_cluster)):
-            for jj in range(mm + 1, len(trj_cluster)):
-                # if cluster[jj] not in grouped_ids:
-                #     continue
-                if len(common_values(trj_cluster[mm], trj_cluster[jj])) >= settings.min_lifetime:
-                    co_pair_num += 1
-                al_pair_num += 1
-    print(co_pair_num, co_pair_num/al_pair_num)
+    connectable_trj_pair, communities, trj2community = get_groups(all_trjs)
+    t2 = time.time()
+    print('LCS+SCAN 分组用时：{}'.format(t2-t1))
 
 
-def period_test(args, trj_number, index):
-    ''' 1. Get a batch of trajectories
-        1.1 Exact group t2G1 of the batch track is obtained
-        1.2 Encodeing this group of trajectories
+    # 向量距离+聚类
+    vecs = t2vec(args, pad_arrays_keep_invp(all_trjs))
+    labels = clustering(vecs)
+    get_recall(labels, all_groups) # 仅聚类后的recall
+    '''3. 对每一类计算exact group 
+       3.1 记录每个组的groupId
+       3.2 记录每个组的common token 
+       3.3 根据common token对聚类进行融合
     '''
-    # Gets the validation set original trajectory for ECMC
-    trajectories = get_raw_trajectory()
-    trj_number = min(trj_number, len(trajectories))
-    # Obtain all trajectory token sequences of the test set for ACMC, t2vec
-    train_loader = DataLoader(os.path.join(args.data, "train"), args.batch)
-    train_loader.load(args.max_train_num)
-    validate_loader = DataLoader(os.path.join(args.data, "val"), args.batch)
-    validate_loader.load(trj_number)
-    trj_number = min(trj_number, len(validate_loader.all_trjs))
-    trajectories = trajectories[0:trj_number]
-    validate_loader.all_trjs = validate_loader.all_trjs[0:trj_number]
-    vocal_size = max(train_loader.maxID, validate_loader.maxID) + 8
-
-    peak, work, casual = [], [], []
-    for ii in range(trj_number):
-        trj = trajectories[ii]
-        time1 = trj[0][2] * (86400/settings.time_size) / 3600
-        time2 = trj[-1][2] * (86400/settings.time_size) / 3600
-        if 0 <= time1 <= 6:
-            casual.append(ii)
-        elif 10 <= time1 <= 17 and 10 <= time2 <= 17:
-            work.append(ii)
-        else:
-            peak.append(ii)
-    print("peak work casual size: ", len(peak), len(work), len(casual))
-    print("vocal_size= {}".format(vocal_size))
-
-    if index == 1:
-        validate_batch = np.array(trajectories)[peak].tolist()
-        # validate_batch = np.narray(validate_loader.all_trjs)[peak].tolist()
-    elif index == 2:
-        validate_batch = np.array(trajectories)[work].tolist()
-        # validate_batch = np.narray(validate_loader.all_trjs)[work].tolist()
-    else:
-        validate_batch = np.array(trajectories)[casual].tolist()
-
-    t1 = time.time()
-
-    e = ECMC()
-    all_pairs, all_groups, trj_map_group = e.get_groups(validate_batch)
-    hit_numbers = [len(item)*(len(item)-1)/2 for item in all_groups]
-    print(len(all_pairs))
-    print("hitnum: ", np.sum(hit_numbers))
-    print("ECMC time: ", time.time() - t1)
-
-    t1 = time.time()
-    if index == 1:
-        validate_batch = np.array(validate_loader.all_trjs)[peak].tolist()
-    elif index == 2:
-        validate_batch = np.array(validate_loader.all_trjs)[work].tolist()
-    else:
-        validate_batch = np.array(validate_loader.all_trjs)[casual].tolist()
-    # Get companion Pairs, companion Groups, companion trj2group in the batch trajectory
-    greedy = ACMC()
-    pairs, groups, trj_map_group = greedy.get_groups(validate_batch)
-    hit_numbers = [len(item) * (len(item)-1) / 2 for item in groups]
-    print(len(pairs))
-    print("hitnum: ", np.sum(hit_numbers))
-    print("ACMC time : ", time.time() - t1)
-    print("**********")
-
-    t1 = time.time()
-    vectors = t2vec(args, pad_arrays_keep_invp(validate_batch), vocal_size)
-    labels = clustering(vectors)
-    # recall = get_recall(labels, all_groups)  # recall rate after cluster
-    # print("recall rate: ", recall)
-    print("Model time: ", time.time() - t1)
-    co_pair_num = 0
-    al_pair_num = 0
-
-    pair = 0
-    for i in range(settings.n):
-        # Extract the track in each cluster
-        cluster = np.where(labels == i)[0].tolist()
-        pair += len(cluster)*(len(cluster)-1)/2
-        trj_cluster = np.array(validate_batch)[cluster].tolist()
-        for mm in range(len(trj_cluster)):
-            for jj in range(mm + 1, len(trj_cluster)):
-                if len(common_values(trj_cluster[mm], trj_cluster[jj])) >= settings.min_lifetime:
-                    co_pair_num += 1
-                al_pair_num += 1
-    print(pair, co_pair_num, co_pair_num/al_pair_num)
+    all_groups1, all_group_cvs1, t2g2 = group_by_cluster(labels,all_trjs)
+    get_recall(t2g2, all_groups) # 仅聚类+重新分组后的recall
+    combine_pair = combine_and_refine(all_groups1, all_group_cvs1, t2g2)
+    return combine_pair
 
 
 if __name__ == "__main__":
-    args = settings.set_args()
-    # get_hit_number(args, 5000)
-    period_test(args, 200000, 3)
-    # 10739 4683 4578 beijing
-    #
-
-# porto 1500 (300, 350, 400, 450)
-# porto (500, 1000, 1500, 2000) 400
-# beijing 1000 (100, 200, 300, 400)
-# beijing (500 1000 1500 2000) 300
+    
+    cb = main()

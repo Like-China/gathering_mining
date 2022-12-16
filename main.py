@@ -3,7 +3,7 @@ import torch
 import warnings
 from trainer.train import train
 from settings import set_args
-from data.porto.porto1500350.evaluator.evaluate import evaluate
+import evaluate
 os.environ['CUDA_ENABLE_DEVICES'] = '0'
 os.environ["CUDA_LAUNCH_BLOCKICNG"] = '1'
 torch.backends.cudnn.enabled=False
