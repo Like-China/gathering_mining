@@ -5,35 +5,10 @@ from settings import set_args
 import numpy as np
 import time
 import settings as constants
-from index.scan import  get_communities
+from indexing.scan import  get_communities
 from tqdm import tqdm
 
-def t2vec(args, data):
-    "read source sequences from trj.t and write the tensor into file trj.h5"
-    m0 = EncoderDecoder(args.vocab_size, args.embedding_size,
-                        args.hidden_size, args.num_layers,
-                        args.dropout, args.bidirectional)
-    if os.path.isfile(args.checkpoint):
-        print("=> loading checkpoint '{}'".format(args.checkpoint))
-        checkpoint = torch.load(args.checkpoint)
-        m0.load_state_dict(checkpoint["m0"])
-        if torch.cuda.is_available():
-            m0.cuda()
-        m0.eval()
-        vecs = []
-        src, lengths, invp = data[0], data[1], data[2]
-        if torch.cuda.is_available():
-            src, lengths, invp = src.cuda(), lengths.cuda(), invp.cuda()
-        h, _ = m0.encoder(src, lengths) # 【层数*双向2，该组轨迹个数，隐藏层数】【6，constants.n，128】
-        h = m0.encoder_hn2decoder_h0(h)
-        h = h.transpose(0, 1).contiguous()
-        vecs.append(h[invp].cpu().data)
-        
-        vecs = torch.cat(vecs) # [10,3,256]
-        vecs = vecs.transpose(0, 1).contiguous()  ## [3,10,256]
-    else:
-        print("=> no checkpoint found at '{}'".format(args.checkpoint))
-    return vecs[m0.num_layers-1].tolist()
+
 
 
 def clustering(vecs):

@@ -1,21 +1,102 @@
-import os
-import torch
-import warnings
-from trainer.train import train
-from settings import set_args
-import evaluate
-os.environ['CUDA_ENABLE_DEVICES'] = '0'
-os.environ["CUDA_LAUNCH_BLOCKICNG"] = '1'
-torch.backends.cudnn.enabled=False
-warnings.filterwarnings("ignore")
+from loader.data_loader import Loader
+from indexing.myRtree import my_rtree
+import numpy as np
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+import time
+from baselines.GS_ECMC_multi import ECMC
+from baselines.LCS_SCAN import SCAN
+from baselines.GS_ACMC import ACMC
+
+
+def recall(real_label, pred_label):
+    hit_count = 0
+    unhit_count = 0
+    for ii in  range(len(real_label)):
+        for jj in range(ii+1, len(real_label)):
+            if real_label[ii] == -1 or real_label[jj] == -1:
+                continue
+            if real_label[ii] == real_label[jj]:
+                if pred_label[ii] == pred_label[jj] and pred_label[ii] != -1:
+                    hit_count += 1
+                else:
+                    unhit_count += 1
+    if (hit_count+unhit_count) == 0:
+        return 0
+    else:
+        # print(hit_count, unhit_count)
+        return hit_count/(hit_count+unhit_count)
+
+
+def hit_ratio(real_label, pred_label):
+    TP, TN, FP, FN = 0, 0, 0, 0
+    for ii in  range(len(real_label)):
+        for jj in range(ii+1, len(real_label)):
+            # if real_label[jj] == -1:
+            #     continue
+            if real_label[ii] == real_label[jj]:
+                if pred_label[ii] == pred_label[jj]:
+                    TP += 1
+                else:
+                    FN += 1
+            else:
+                if pred_label[ii] == pred_label[jj]:
+                    FP += 1
+                else:
+                    TN += 1
+    if (TP+FN) == 0:
+        return 0
+    else:
+        print(TP, TP+FN, FP)
+        return TP/(TP+FN)
+
+
+def load_index(scale, time_size, num):
+    # 加载数据
+    trajectory_set = Loader(scale, time_size).load(num)
+    # 建立索引
+    idx = my_rtree()
+    for trj in trajectory_set:
+        idx.insert(trj.id, trj.mbr)
+    # 索引查询, 对每条轨迹记录其有时空交集的其他轨迹id序列
+    for trj in trajectory_set:
+        trj.set_intersect_trjs(list(idx.intersection(trj.mbr)))
+    return trajectory_set, idx
+
+import datetime
+def find_best(nums, time_sizes, scales, eps, dist_errors, time_errors):
+    res = []
+    for num in nums:
+        for dist_error in dist_errors:
+            for time_error in time_errors:
+                for min_lifetime in [3,4,5,6,7]:
+                    print(datetime.datetime.now())
+                    trajectory_set, idx = load_index(scales[0], time_sizes[0], num)
+                    # 基于轨迹对象，开始执行查询, 精确查询 Ground-truth (10K 接近1h)
+                    ecmc_labels = ECMC(min_lifetime, min_lifetime, dist_error, time_error).get_groups(
+                        trajectory_set)
+                    for time_size in time_sizes:
+                        for scale in scales:
+                            print(
+                                "\n***************num={}, time_size={}, scale={}, dist_error={}, time_error={}, life={}****************".format(
+                                    num, time_size, scale, dist_error, time_error, min_lifetime))
+                            # LCS+SCAN 快速组合
+                            trajectory_set, idx = load_index(scale, time_size, num)
+                            Sscan_labels = SCAN(min_lifetime, min_lifetime).get_groups(trajectory_set, 0.5)
+                            print("Recall: {}".format(recall(ecmc_labels, scan_labels)))
+                            res.append([num, time_size, scale, min_lifetime, dist_error, time_error,
+                                        len(ECMC_all_pairs),  len(SCAN_all_pairs),
+                                        len(ECMC_all_groups),  len(SCAN_all_groups), recall])
+                            np.save("res", res)
 
 
 if __name__ == "__main__":
-    # 0 for training, otherwise validation
-    train_or_evaluate = 0
-    args = set_args()
-    if train_or_evaluate == 0:
-        train(args)
-    else:
-        evaluate(args)
-
+    # res = np.load("res.npy")
+    # import pandas as pd
+    # res = pd.DataFrame(res, columns=['num','time','scale','min_lifetime','derror','terror','epair','apair','spair','eg','ag','sg','r1','r2','r3'])
+    # res.to_csv("res2.csv")
+    # nums, time_sizes, scales = [10000,20000], [40], [0.001,0.002]
+    # dist_errors = np.linspace(100,300,3).tolist()
+    # time_errors = np.linspace(100,300,3).tolist()
+    # eps = [0.5]
+    # find_best(nums, time_sizes, scales, eps, dist_errors, time_errors)
