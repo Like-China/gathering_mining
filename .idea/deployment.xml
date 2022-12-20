@@ -1,25 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="Copy of project-level server 'lab-like'" showNewOnTargetInSync="false" showAutoUploadSettingsWarning="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="30901" showNewOnTargetInSync="false" showAutoUploadSettingsWarning="false">
     <serverData>
       <paths name="30901">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="Copy of project-level server 'lab-like'">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/codes/gathering" local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="Like@121.48.161.78:22 agent">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/python_workplace/gathering_kdd22" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/codes/gathering" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>

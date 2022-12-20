@@ -63,7 +63,7 @@ class SCAN:
                 labels[trj_id] = ii
         print(
             '归组人数:{0}\t组数：{1}'.format(sum(np.array(labels) != -1), len(communities)))
-        return labels
+        return pairs, communities, labels
 
 
 

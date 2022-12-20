@@ -43,7 +43,7 @@ class Loader:
 
     def __init__(self, scale, time_size):
         self.args = set_region_args(scale, time_size)
-        self.h5path = os.path.join("/home/like/data", self.args.city + ".h5")
+        self.h5path = os.path.join("/data/Like/", self.args.city + ".h5")
         # self.h5path = os.path.join("E:\\data\porto.h5")
         # print("parameter setting： \n", self.args)
 

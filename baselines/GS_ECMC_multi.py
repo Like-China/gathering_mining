@@ -114,6 +114,6 @@ class ECMC:
         # print("\n")
         # for group in all_groups:
         #     print([trj.id for trj in group])
-        return labels
+        return all_pairs, all_groups, labels
 
 
