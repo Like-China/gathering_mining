@@ -1,4 +1,4 @@
-This code is the implementation of
+This code is the implementation of ¡°Relaxed Group Pattern Detection over Massive-Scale Trajectories¡±
 # datasets
 Beijing https://www.microsoft.com/en-us/research/publication/t-drive-trajectory-data-sample/
 Porto https://www.kaggle.com/c/pkdd-15-predict-taxi-service-trajectory-i/data
