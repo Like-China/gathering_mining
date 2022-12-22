@@ -54,16 +54,16 @@ class Loader:
         trajectory_set = [Trajectory(ii) for ii in range(trj_nums)]
         # for i in tqdm(range(trj_nums), desc='read lon, lat'):
         for i in range(trj_nums):
-            trip = np.array(f.get('trips/%d' % (i+1)))  # numpy n*2, [[lon,lat],[lon,lat]]
+            trip = np.array(f.get('trips/%d' % (i+1)))[:settings.max_len] # numpy n*2, [[lon,lat],[lon,lat]]
             trajectory_set[i].set_lon_lat(trip)
         # for i in tqdm(range(trj_nums), desc='read timestamp'):
         for i in range(trj_nums):
-            ts = np.array(f.get('timestamps/%d' % (i+1))) # numpy n*1
+            ts = np.array(f.get('timestamps/%d' % (i+1)))[:settings.max_len] # numpy n*1
             trajectory_set[i].set_time_seq(ts)
         for i in range(trj_nums):
         # for i in tqdm(range(trj_nums), desc='get token seqs'):
             trj = trajectory_set[i]
-            trj.token_seq = self.trip2mapIDs(trj.lon_lat_seq, trj.time_seq)
+            trj.token_seq = self.trip2mapIDs(trj.lon_lat_seq, trj.time_seq)[:settings.max_len]
             # trj.token_seq = self.trip2spaceIDs(trj.lon_lat_seq)
         return trajectory_set
 

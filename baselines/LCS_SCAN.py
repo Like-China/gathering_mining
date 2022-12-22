@@ -26,7 +26,7 @@ class SCAN:
         """
         # t1 = time.time()
         all_pairs = []
-        for trj in trjs:
+        for trj in tqdm(trjs):
             pairs = []
             count = 0
             if trj.intersect_count < self.min_group_trj_nums or trj.size < self.min_lifetime:
